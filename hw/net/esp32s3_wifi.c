@@ -136,6 +136,18 @@ static void esp32s3_wifi_reset_hold(Object *obj, ResetType type)
     memset(s->slchost_regs, 0, sizeof(s->slchost_regs));
     memset(s->wdev_regs, 0, sizeof(s->wdev_regs));
 
+    /*
+     * Pre-load init-critical register defaults.
+     * The ESP-IDF PHY init code (register_chipv7_phy ROM function) reads
+     * power-down control registers in BB/NRX/FE/FE2 blocks and expects
+     * them to have power-up defaults. Without these, the closed-source
+     * PHY calibration may fail or behave unexpectedly.
+     */
+    s->bb_regs[BB_BBPD_CTRL_OFF / 4] = BB_BBPD_CTRL_DEFAULT;
+    s->nrx_regs[NRX_NRXPD_CTRL_OFF / 4] = NRX_NRXPD_CTRL_DEFAULT;
+    s->fe_regs[FE_GEN_CTRL_OFF / 4] = FE_GEN_CTRL_DEFAULT;
+    s->fe2_regs[FE2_TX_INTERP_CTRL_OFF / 4] = FE2_TX_INTERP_CTRL_DEFAULT;
+
     /* De-assert all IRQs */
     for (int i = 0; i < ESP32S3_WIFI_IRQ_COUNT; i++) {
         qemu_set_irq(s->irq[i], 0);
