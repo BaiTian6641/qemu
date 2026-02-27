@@ -64,6 +64,9 @@
 #include "hw/misc/esp32s3_xts_aes.h"
 #include "hw/misc/esp32s3_pms.h"
 #include "hw/net/can/esp32s3_twai.h"
+#include "hw/gpio/esp32s3_iomux.h"
+#include "hw/timer/esp32s3_rmt.h"
+#include "hw/net/esp32s3_wifi.h"
 
 #include "cpu_esp32s3.h"
 
@@ -150,6 +153,10 @@ typedef struct Esp32s3SocState {
 
     ESP32C3UsbJtagState jtag;
     ESPRgbState rgb;
+
+    ESP32S3IOMuxState iomux;
+    ESP32S3RmtState rmt;
+    ESP32S3WifiState wifi;
 
     MemoryRegion iomem;
     DWCSDMMCState sdmmc;
@@ -443,6 +450,18 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
     cpu_physical_memory_write(apb_ctrl_regs + 0x7c, &apb_ctrl_date_reg_val, 4);
     cpu_physical_memory_write(apb_ctrl_regs + RGB_QEMU_ORIGIN_REG, &qemu_sig, 4);
 
+    /* SYSCON_WIFI_CLK_EN_REG (offset 0x14): hardware default 0xFFFCE030.
+     * The ESP-IDF PHY init code asserts that modem clock bits (0x788F8F) are set
+     * after calling phy_module_enable(). Without this default, esp_wifi_init() fails.
+     */
+    {
+        uint32_t wifi_clk_en = 0xFFFCE030;
+        cpu_physical_memory_write(apb_ctrl_regs + 0x14, &wifi_clk_en, 4);
+        /* SYSCON_WIFI_RST_EN_REG (offset 0x18): default 0 (no modules in reset) */
+        uint32_t wifi_rst_en = 0x00000000;
+        cpu_physical_memory_write(apb_ctrl_regs + 0x18, &wifi_rst_en, 4);
+    }
+
     qemu_register_reset((QEMUResetHandler*) esp32s3_soc_reset, dev);
 
     /* TWAI realization */
@@ -657,6 +676,9 @@ static void esp32s3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(ss), "timg1", &ss->timg[1], TYPE_ESP32S3_TIMG);
     object_initialize_child(OBJECT(ss), "systimer", &ss->systimer, TYPE_ESP32S3_SYSTIMER);
     object_initialize_child(OBJECT(ss), "rgb", &ss->rgb, TYPE_ESP_RGB);
+    object_initialize_child(OBJECT(ss), "iomux", &ss->iomux, TYPE_ESP32S3_IOMUX);
+    object_initialize_child(OBJECT(ss), "rmt", &ss->rmt, TYPE_ESP32S3_RMT);
+    object_initialize_child(OBJECT(ss), "wifi", &ss->wifi, TYPE_ESP32S3_WIFI);
 
     DeviceState* intmatrix_dev = DEVICE(&ss->intmatrix);
     {
@@ -773,6 +795,8 @@ static void esp32s3_machine_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(&ss->gpio), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpio), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_GPIO_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->gpio), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_GPIO_INTR_SOURCE));
     }
 
     {
@@ -869,8 +893,51 @@ static void esp32s3_machine_init(MachineState *machine)
         memory_region_add_subregion_overlap(sys_mem, esp32s3_memmap[ESP32S3_MEMREGION_FRAMEBUF].base, &ss->rgb.vram, 0);
     }
 
-    esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.rmt", DR_REG_RMT_BASE, 0x1000);
-    esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.iomux", DR_REG_IO_MUX_BASE, 0x2000);
+    /* IO MUX realization */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->iomux), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->iomux), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_IO_MUX_BASE, mr, 0);
+    }
+
+    /* RMT realization */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->rmt), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->rmt), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_RMT_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->rmt), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_RMT_INTR_SOURCE));
+    }
+
+    /* Wi-Fi skeleton realization */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->wifi), &error_fatal);
+        /* Map each Wi-Fi sub-block to its physical address */
+        /* 0=BB, 1=NRX, 2=FE, 3=FE2, 4=SLC, 5=SLCHOST, 6=WDEV */
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_BB_BASE,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->wifi), 0), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_NRX_BASE,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->wifi), 1), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_FE_BASE,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->wifi), 2), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_FE2_BASE,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->wifi), 3), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_SLC_BASE,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->wifi), 4), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_SLCHOST_BASE,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->wifi), 5), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_WDEV_BASE,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->wifi), 6), 0);
+        /* Connect Wi-Fi IRQs to interrupt matrix.
+         * Note: ETS_WIFI_MAC_INTR_SOURCE (0) is currently shared with
+         * OpenCores Ethernet (ETS_ETH_MAC_INTR_SOURCE), so we skip
+         * the MAC IRQ connection here until Wi-Fi replaces the Ethernet
+         * workaround. */
+        qdev_connect_gpio_out_named(DEVICE(&ss->wifi), ESP32S3_WIFI_IRQ_NAME, ESP32S3_WIFI_IRQ_PWR,
+                                    qdev_get_gpio_in(intmatrix_dev, ETS_WIFI_PWR_INTR_SOURCE));
+        qdev_connect_gpio_out_named(DEVICE(&ss->wifi), ESP32S3_WIFI_IRQ_NAME, ESP32S3_WIFI_IRQ_BB,
+                                    qdev_get_gpio_in(intmatrix_dev, ETS_WIFI_BB_INTR_SOURCE));
+    }
 
     
     esp32s3_machine_init_sd(ss);

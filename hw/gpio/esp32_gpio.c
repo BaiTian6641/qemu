@@ -21,7 +21,7 @@
 
 
 
-static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+static uint64_t esp32_gpio_read_default(void *opaque, hwaddr addr, unsigned int size)
 {
     Esp32GpioState *s = ESP32_GPIO(opaque);
     uint64_t r = 0;
@@ -36,9 +36,23 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
     return r;
 }
 
+static void esp32_gpio_write_default(void *opaque, hwaddr addr,
+                       uint64_t value, unsigned int size)
+{
+}
+
+/* Virtual dispatch wrappers for MemoryRegionOps */
+static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    Esp32GpioClass *klass = ESP32_GPIO_GET_CLASS(opaque);
+    return klass->gpio_read(opaque, addr, size);
+}
+
 static void esp32_gpio_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
+    Esp32GpioClass *klass = ESP32_GPIO_GET_CLASS(opaque);
+    klass->gpio_write(opaque, addr, value, size);
 }
 
 static const MemoryRegionOps uart_ops = {
@@ -80,10 +94,15 @@ static void esp32_gpio_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);
+    Esp32GpioClass *gc = ESP32_GPIO_CLASS(klass);
 
     rc->phases.hold = esp32_gpio_reset_hold;
     dc->realize = esp32_gpio_realize;
     device_class_set_props(dc, esp32_gpio_properties);
+
+    /* Default virtual methods — children override */
+    gc->gpio_read = esp32_gpio_read_default;
+    gc->gpio_write = esp32_gpio_write_default;
 }
 
 static const TypeInfo esp32_gpio_info = {

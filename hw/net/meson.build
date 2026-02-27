@@ -70,3 +70,5 @@ system_ss.add(when: 'CONFIG_ROCKER', if_true: files(
 system_ss.add(files('rocker/rocker-hmp-cmds.c'))
 
 subdir('can')
+
+system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files('esp32s3_wifi.c'))

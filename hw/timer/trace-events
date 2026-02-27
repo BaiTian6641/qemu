@@ -128,3 +128,11 @@ hpet_ram_write_invalid_tn_cmp(void) "invalid HPET_TN_CMP + 4 write"
 hpet_ram_write_invalid(void) "invalid hpet_ram_writel"
 hpet_ram_write_counter_write_while_enabled(void) "Writing counter while HPET enabled!"
 hpet_ram_write_counter_written(uint8_t reg_off, uint64_t value, uint64_t counter) "HPET counter + %" PRIu8 "written. crt = 0x%" PRIx64 " -> 0x%" PRIx64
+
+# esp32s3_rmt.c
+esp32s3_rmt_read(uint64_t addr, uint32_t value) "RMT read addr 0x%" PRIx64 " value 0x%08" PRIx32
+esp32s3_rmt_write(uint64_t addr, uint32_t value) "RMT write addr 0x%" PRIx64 " value 0x%08" PRIx32
+esp32s3_rmt_tx_start(int channel) "RMT TX start channel %d"
+esp32s3_rmt_tx_end(int channel) "RMT TX end channel %d"
+esp32s3_rmt_irq_update(uint32_t raw, uint32_t ena, uint32_t pending) "RMT IRQ raw=0x%08" PRIx32 " ena=0x%08" PRIx32 " pending=0x%08" PRIx32
+esp32s3_rmt_reset(void) "RMT reset"

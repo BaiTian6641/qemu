@@ -24,4 +24,8 @@ typedef struct Esp32GpioState {
 
 typedef struct Esp32GpioClass {
     SysBusDeviceClass parent_class;
+
+    /* Virtual read/write methods — children override for custom register handling */
+    uint64_t (*gpio_read)(void *opaque, hwaddr addr, unsigned int size);
+    void (*gpio_write)(void *opaque, hwaddr addr, uint64_t value, unsigned int size);
 } Esp32GpioClass;
