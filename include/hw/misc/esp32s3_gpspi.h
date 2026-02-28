@@ -17,6 +17,7 @@
 #pragma once
 
 #include "hw/sysbus.h"
+#include "hw/dma/esp_gdma.h"
 
 #define TYPE_ESP32S3_GPSPI  "esp32s3.gpspi"
 #define ESP32S3_GPSPI(obj)  OBJECT_CHECK(ESP32S3GpSpiState, (obj), TYPE_ESP32S3_GPSPI)
@@ -67,6 +68,9 @@ typedef struct ESP32S3GpSpiState {
 
     MemoryRegion iomem;
     qemu_irq irq;
+
+    ESPGdmaState *gdma;
+    GdmaPeripheral gdma_periph;
 
     uint32_t regs[ESP32S3_GPSPI_REGS_COUNT];
     uint32_t int_raw;

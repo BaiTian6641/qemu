@@ -15,7 +15,34 @@
 #include "qemu/log.h"
 #include "hw/irq.h"
 #include "hw/sysbus.h"
+#include "hw/dma/esp_gdma.h"
 #include "hw/misc/esp32s3_i2s.h"
+
+#define I2S_DMA_KICK_BYTES 256
+
+static void esp32s3_i2s_try_dma(ESP32S3I2SState *s, bool tx)
+{
+    uint32_t chan;
+    uint8_t buffer[I2S_DMA_KICK_BYTES] = { 0 };
+
+    if (!s->gdma) {
+        return;
+    }
+
+    if (tx) {
+        if (!esp_gdma_get_channel_periph(s->gdma, s->gdma_periph,
+                                         ESP_GDMA_OUT_IDX, &chan)) {
+            return;
+        }
+        (void)esp_gdma_read_channel(s->gdma, chan, buffer, sizeof(buffer));
+    } else {
+        if (!esp_gdma_get_channel_periph(s->gdma, s->gdma_periph,
+                                         ESP_GDMA_IN_IDX, &chan)) {
+            return;
+        }
+        (void)esp_gdma_write_channel(s->gdma, chan, buffer, sizeof(buffer));
+    }
+}
 
 static void esp32s3_i2s_update_irq(ESP32S3I2SState *s)
 {
@@ -70,6 +97,9 @@ static void esp32s3_i2s_write(void *opaque, hwaddr addr,
             val &= ~I2S_TX_FIFO_RESET;
         }
         if (val & I2S_TX_START) {
+            /* Kick GDMA channel if one is assigned to this I2S instance */
+            esp32s3_i2s_try_dma(s, true);
+
             /* MVP: immediate TX completion */
             s->int_raw |= I2S_INT_TX_DONE;
             esp32s3_i2s_update_irq(s);
@@ -90,6 +120,9 @@ static void esp32s3_i2s_write(void *opaque, hwaddr addr,
             val &= ~I2S_RX_FIFO_RESET;
         }
         if (val & I2S_RX_START) {
+            esp32s3_i2s_try_dma(s, false);
+            s->int_raw |= I2S_INT_RX_DONE;
+            esp32s3_i2s_update_irq(s);
             val &= ~I2S_RX_START;
         }
         if (val & I2S_RX_UPDATE) {

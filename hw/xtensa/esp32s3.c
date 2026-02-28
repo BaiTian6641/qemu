@@ -80,6 +80,10 @@
 #include "hw/misc/esp32s3_lcd_cam.h"
 #include "hw/misc/esp32s3_usb_otg.h"
 #include "hw/misc/esp32s3_gpspi.h"
+#include "hw/misc/esp32s3_apb_saradc.h"
+#include "hw/misc/esp32s3_sens.h"
+#include "hw/misc/esp32s3_ulp.h"
+#include "hw/misc/esp32s3_coex.h"
 
 #include "cpu_esp32s3.h"
 
@@ -186,6 +190,12 @@ typedef struct Esp32s3SocState {
     ESP32S3LcdCamState lcd_cam;
     ESP32S3UsbOtgState usb_otg;
     ESP32S3GpSpiState gpspi[2];
+
+    /* S8 peripherals */
+    ESP32S3ApbSaradcState apb_saradc;
+    ESP32S3SensState sens;
+    ESP32S3UlpState ulp;
+    ESP32S3CoexState coex;
 
     MemoryRegion iomem;
     DWCSDMMCState sdmmc;
@@ -669,6 +679,12 @@ static void esp32s3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(ms), "soc", &ms->esp32s3, TYPE_ESP32S3_SOC);
     Esp32s3SocState *ss = ESP32S3_SOC(&ms->esp32s3);
 
+    /* Must be initialized before qdev_realize(DEVICE(ss)) because
+     * esp32s3_soc_realize() realizes these sub-devices. */
+    object_initialize_child(OBJECT(ss), "syscon", &ss->syscon, TYPE_ESP32S3_SYSCON);
+    object_initialize_child(OBJECT(ss), "assist_debug", &ss->assist_debug, TYPE_ESP32S3_ASSIST_DEBUG);
+    object_initialize_child(OBJECT(ss), "regi2c", &ss->regi2c, TYPE_ESP32S3_REGI2C);
+
     MemoryRegion *dram = g_new(MemoryRegion, 1);
     const struct MemmapEntry *memmap = esp32s3_memmap;
 
@@ -712,10 +728,6 @@ static void esp32s3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(ss), "iomux", &ss->iomux, TYPE_ESP32S3_IOMUX);
     object_initialize_child(OBJECT(ss), "rmt", &ss->rmt, TYPE_ESP32S3_RMT);
     object_initialize_child(OBJECT(ss), "wifi", &ss->wifi, TYPE_ESP32S3_WIFI);
-    object_initialize_child(OBJECT(ss), "syscon", &ss->syscon, TYPE_ESP32S3_SYSCON);
-    object_initialize_child(OBJECT(ss), "assist_debug", &ss->assist_debug, TYPE_ESP32S3_ASSIST_DEBUG);
-    object_initialize_child(OBJECT(ss), "regi2c", &ss->regi2c, TYPE_ESP32S3_REGI2C);
-
     for (int i = 0; i < ESP32S3_I2C_COUNT; i++) {
         char name[8];
         snprintf(name, sizeof(name), "i2c%d", i);
@@ -739,6 +751,12 @@ static void esp32s3_machine_init(MachineState *machine)
     }
     object_initialize_child(OBJECT(ss), "lcd_cam", &ss->lcd_cam, TYPE_ESP32S3_LCD_CAM);
     object_initialize_child(OBJECT(ss), "usb_otg", &ss->usb_otg, TYPE_ESP32S3_USB_OTG);
+
+    /* S8 peripherals */
+    object_initialize_child(OBJECT(ss), "apb_saradc", &ss->apb_saradc, TYPE_ESP32S3_APB_SARADC);
+    object_initialize_child(OBJECT(ss), "sens", &ss->sens, TYPE_ESP32S3_SENS);
+    object_initialize_child(OBJECT(ss), "ulp", &ss->ulp, TYPE_ESP32S3_ULP);
+    object_initialize_child(OBJECT(ss), "coex", &ss->coex, TYPE_ESP32S3_COEX);
     for (int i = 0; i < 2; i++) {
         char name[8];
         snprintf(name, sizeof(name), "gpspi%d", i + 2);
@@ -1079,7 +1097,10 @@ static void esp32s3_machine_init(MachineState *machine)
     {
         static const hwaddr i2s_base[] = { DR_REG_I2S_BASE, DR_REG_I2S1_BASE };
         static const int i2s_irq[] = { ETS_I2S0_INTR_SOURCE, ETS_I2S1_INTR_SOURCE };
+        static const GdmaPeripheral i2s_gdma_periph[] = { GDMA_I2S0, GDMA_I2S1 };
         for (int i = 0; i < 2; i++) {
+            ss->i2s[i].gdma = ESP_GDMA(&ss->gdma);
+            ss->i2s[i].gdma_periph = i2s_gdma_periph[i];
             sysbus_realize(SYS_BUS_DEVICE(&ss->i2s[i]), &error_fatal);
             MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->i2s[i]), 0);
             memory_region_add_subregion_overlap(sys_mem, i2s_base[i], mr, 0);
@@ -1092,7 +1113,10 @@ static void esp32s3_machine_init(MachineState *machine)
     {
         static const hwaddr spi_base[] = { DR_REG_SPI2_BASE, DR_REG_SPI3_BASE };
         static const int spi_irq[] = { ETS_SPI2_INTR_SOURCE, ETS_SPI3_INTR_SOURCE };
+        static const GdmaPeripheral spi_gdma_periph[] = { GDMA_SPI2, GDMA_SPI3 };
         for (int i = 0; i < 2; i++) {
+            ss->gpspi[i].gdma = ESP_GDMA(&ss->gdma);
+            ss->gpspi[i].gdma_periph = spi_gdma_periph[i];
             sysbus_realize(SYS_BUS_DEVICE(&ss->gpspi[i]), &error_fatal);
             MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpspi[i]), 0);
             memory_region_add_subregion_overlap(sys_mem, spi_base[i], mr, 0);
@@ -1116,6 +1140,7 @@ static void esp32s3_machine_init(MachineState *machine)
 
     /* LCD_CAM */
     {
+        ss->lcd_cam.gdma = ESP_GDMA(&ss->gdma);
         sysbus_realize(SYS_BUS_DEVICE(&ss->lcd_cam), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->lcd_cam), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_LCD_CAM_BASE, mr, 0);
@@ -1130,6 +1155,37 @@ static void esp32s3_machine_init(MachineState *machine)
         memory_region_add_subregion_overlap(sys_mem, DR_REG_USB_DWC_BASE, mr, 0);
         sysbus_connect_irq(SYS_BUS_DEVICE(&ss->usb_otg), 0,
                            qdev_get_gpio_in(intmatrix_dev, ETS_USB_INTR_SOURCE));
+    }
+
+    /* APB SAR ADC (S8) */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->apb_saradc), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->apb_saradc), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_APB_SARADC_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->apb_saradc), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_APB_ADC_INTR_SOURCE));
+    }
+
+    /* SENS / Touch / Analog (S8) */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->sens), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->sens), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_SENS_BASE, mr, 0);
+    }
+
+    /* ULP RTC Slow Memory (S8) */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->ulp), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->ulp), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_RTC_SLOWMEM_BASE, mr, 0);
+    }
+
+    /* Coexistence arbitration model (S8) — mapped after BT/Wi-Fi blocks */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->coex), &error_fatal);
+        /* Virtual QEMU-only peripheral mapped in an unused window */
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->coex), 0);
+        memory_region_add_subregion_overlap(sys_mem, COEX_MMIO_BASE, mr, 0);
     }
 
     esp32s3_machine_init_sd(ss);

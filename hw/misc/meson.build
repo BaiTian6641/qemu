@@ -181,6 +181,10 @@ system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files(
   'esp32s3_lcd_cam.c',
   'esp32s3_usb_otg.c',
   'esp32s3_gpspi.c',
+  'esp32s3_apb_saradc.c',
+  'esp32s3_sens.c',
+  'esp32s3_ulp.c',
+  'esp32s3_coex.c',
 ))
 
 if gcrypt.found()

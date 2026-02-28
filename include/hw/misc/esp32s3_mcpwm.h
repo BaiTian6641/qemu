@@ -47,12 +47,13 @@
 #define MCPWM_CAP_CH1_REG       0x10C
 #define MCPWM_CAP_CH2_REG       0x110
 #define MCPWM_CAP_STATUS_REG    0x114
-#define MCPWM_UPDATE_CFG_REG    0x118
-#define MCPWM_INT_ENA_REG       0x11C
-#define MCPWM_INT_RAW_REG       0x120
-#define MCPWM_INT_ST_REG        0x124
-
-/* Last 4 bytes would be int_clr or version — struct ends at 0x128 */
+#define MCPWM_UPDATE_CFG_REG    0x10C
+#define MCPWM_INT_ENA_REG       0x110
+#define MCPWM_INT_RAW_REG       0x114
+#define MCPWM_INT_ST_REG        0x118
+#define MCPWM_INT_CLR_REG       0x11C
+#define MCPWM_CLK_REG           0x120
+#define MCPWM_VERSION_REG       0x124
 
 #define ESP32S3_MCPWM_REGS_COUNT  (ESP32S3_MCPWM_REG_SIZE / 4)
 

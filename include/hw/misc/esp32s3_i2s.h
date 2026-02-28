@@ -16,6 +16,7 @@
 #pragma once
 
 #include "hw/sysbus.h"
+#include "hw/dma/esp_gdma.h"
 
 #define TYPE_ESP32S3_I2S  "esp32s3.i2s"
 #define ESP32S3_I2S(obj)  OBJECT_CHECK(ESP32S3I2SState, (obj), TYPE_ESP32S3_I2S)
@@ -58,13 +59,13 @@
 #define I2S_TX_RESET      BIT(0)
 #define I2S_TX_FIFO_RESET BIT(1)
 #define I2S_TX_START      BIT(2)
-#define I2S_TX_UPDATE     BIT(3)
+#define I2S_TX_UPDATE     BIT(8)   /* R/W/SC per ESP-IDF i2s_reg.h */
 
 /* RX_CONF bits */
 #define I2S_RX_RESET      BIT(0)
 #define I2S_RX_FIFO_RESET BIT(1)
 #define I2S_RX_START      BIT(2)
-#define I2S_RX_UPDATE     BIT(3)
+#define I2S_RX_UPDATE     BIT(8)   /* R/W/SC per ESP-IDF i2s_reg.h */
 
 #define ESP32S3_I2S_REGS_COUNT  (ESP32S3_I2S_REG_SIZE / 4)
 
@@ -73,6 +74,9 @@ typedef struct ESP32S3I2SState {
 
     MemoryRegion iomem;
     qemu_irq irq;
+
+    ESPGdmaState *gdma;
+    GdmaPeripheral gdma_periph;
 
     uint32_t regs[ESP32S3_I2S_REGS_COUNT];
     uint32_t int_raw;

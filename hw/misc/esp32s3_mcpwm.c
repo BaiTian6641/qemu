@@ -32,6 +32,12 @@ static uint64_t esp32s3_mcpwm_read(void *opaque, hwaddr addr, unsigned int size)
         return s->int_raw & s->int_ena;
     case MCPWM_INT_ENA_REG:
         return s->int_ena;
+    case MCPWM_INT_CLR_REG:
+        return 0;  /* write-only */
+    case MCPWM_CLK_REG:
+        return s->regs[addr / 4];
+    case MCPWM_VERSION_REG:
+        return 0x20190625;  /* MCPWM version per ESP32-S3 */
     /* Timer status registers are read-only: return counter = 0, direction = up */
     case MCPWM_TIMER0_STATUS_REG:
     case MCPWM_TIMER0_STATUS_REG + 0x10:
@@ -61,8 +67,13 @@ static void esp32s3_mcpwm_write(void *opaque, hwaddr addr,
         s->int_ena = (uint32_t)value;
         esp32s3_mcpwm_update_irq(s);
         return;
+    case MCPWM_INT_CLR_REG:
+        /* W1C: write-1-to-clear interrupt raw bits */
+        s->int_raw &= ~(uint32_t)value;
+        esp32s3_mcpwm_update_irq(s);
+        return;
     case MCPWM_INT_RAW_REG:
-        /* Some MCPWM raw bits are W1C */
+        /* INT_RAW is RO/WTC/SS on ESP32-S3 — some bits allow W1C */
         s->int_raw &= ~(uint32_t)value;
         esp32s3_mcpwm_update_irq(s);
         return;

@@ -14,7 +14,34 @@
 #include "qemu/log.h"
 #include "hw/irq.h"
 #include "hw/sysbus.h"
+#include "hw/dma/esp_gdma.h"
 #include "hw/misc/esp32s3_gpspi.h"
+
+#define GPSPI_DMA_KICK_BYTES 256
+
+static void esp32s3_gpspi_try_dma(ESP32S3GpSpiState *s)
+{
+    uint32_t chan;
+    uint8_t buffer[GPSPI_DMA_KICK_BYTES] = { 0 };
+
+    if (!s->gdma) {
+        return;
+    }
+
+    if (esp_gdma_get_channel_periph(s->gdma, s->gdma_periph,
+                                    ESP_GDMA_OUT_IDX, &chan)) {
+        if (esp_gdma_read_channel(s->gdma, chan, buffer, sizeof(buffer))) {
+            s->int_raw |= SPI_INT_WR_DMA_DONE;
+        }
+    }
+
+    if (esp_gdma_get_channel_periph(s->gdma, s->gdma_periph,
+                                    ESP_GDMA_IN_IDX, &chan)) {
+        if (esp_gdma_write_channel(s->gdma, chan, buffer, sizeof(buffer))) {
+            s->int_raw |= SPI_INT_RD_DMA_DONE;
+        }
+    }
+}
 
 static void esp32s3_gpspi_update_irq(ESP32S3GpSpiState *s)
 {
@@ -68,6 +95,8 @@ static void esp32s3_gpspi_write(void *opaque, hwaddr addr,
     case SPI_CMD_REG: {
         uint32_t val = (uint32_t)value;
         if (val & SPI_CMD_USR) {
+            esp32s3_gpspi_try_dma(s);
+
             /* MVP: immediate transaction completion */
             s->int_raw |= SPI_INT_TRANS_DONE;
             esp32s3_gpspi_update_irq(s);
