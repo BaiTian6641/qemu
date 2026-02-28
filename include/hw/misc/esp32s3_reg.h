@@ -73,6 +73,7 @@
 #define DR_REG_MMU_TABLE                        0x600C5000
 #define DR_REG_ASSIST_DEBUG_BASE                0x600CE000
 #define DR_REG_WCL_BASE                         0x600D0000
+#define DR_REG_USB_DWC_BASE                     0x60080000
 #define ESP_CACHE_TEMP_ADDR                     0x3C800000
 #define DR_REG_EMAC_BASE                        0x600CD000
 #define DR_REG_WDEV_BASE                        0x3ff75000

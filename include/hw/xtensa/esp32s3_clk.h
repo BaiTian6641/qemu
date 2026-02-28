@@ -45,20 +45,52 @@ typedef struct ESP32S3ClockState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
 
+    /* Core 1 control */
+    uint32_t core1_ctrl0;           /* 0x000: CORE_1_CONTROL_0 (runstall) */
+    uint32_t app_cpu_addr;          /* 0x004: CORE_1_CONTROL_1 (boot addr) */
+
+    /* CPU peripheral clocking */
+    uint32_t cpu_peri_clk_en;       /* 0x008 */
+    uint32_t cpu_peri_rst_en;       /* 0x00C */
+
     /* Registers for clocks configuration and frequency dividers */
-    uint32_t cpuperconf;
-    uint32_t sysclk;
+    uint32_t cpuperconf;            /* 0x010 */
+    uint32_t mem_pd_mask;           /* 0x014 */
 
+    /* Peripheral clock / reset gate registers */
+    uint32_t perip_clk_en0;         /* 0x018 */
+    uint32_t perip_clk_en1;         /* 0x01C */
+    uint32_t perip_rst_en0;         /* 0x020 */
+    uint32_t perip_rst_en1;         /* 0x024 */
 
-    /* IRQs for crosscore interrupts */
+    /* BT low-power clock divider */
+    uint32_t bt_lpck_div_int;       /* 0x028 */
+    uint32_t bt_lpck_div_frac;      /* 0x02C */
+
+    /* IRQs for crosscore interrupts (0x030–0x03C) */
     qemu_irq irqs[ESP32S3_SYSTEM_CPU_INTR_COUNT];
+    uint32_t levels;  /* Bitmap that keeps the level of the IRQs */
 
-    /* Bitmap that keeps the level of the IRQs */
-    uint32_t levels;
-    
-    uint32_t app_cpu_addr;
-    
-    uint32_t sys_ext_dev_enc_dec_ctrl;
+    /* Power / crypto control */
+    uint32_t rsa_pd_ctrl;           /* 0x040 */
+    uint32_t edma_ctrl;             /* 0x044 */
+    uint32_t cache_control;         /* 0x048 */
+
+    uint32_t sys_ext_dev_enc_dec_ctrl; /* 0x04C */
+
+    /* RTC fast memory CRC */
+    uint32_t rtc_fastmem_config;    /* 0x050 */
+    uint32_t rtc_fastmem_crc;       /* 0x054 */
+
+    /* ECO / clock gate */
+    uint32_t redundant_eco_ctrl;    /* 0x058 */
+    uint32_t clock_gate;            /* 0x05C */
+
+    /* System clock configuration */
+    uint32_t sysclk;                /* 0x060 */
+
+    /* DATE register */
+    uint32_t system_date;           /* 0xFFC */
 } ESP32S3ClockState;
 
 typedef struct ESP32S3ClockClass {

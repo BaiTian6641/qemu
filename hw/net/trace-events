@@ -511,3 +511,12 @@ xen_netdev_connect(int dev, unsigned int tx, unsigned int rx, int port) "vif%u t
 xen_netdev_frontend_changed(const char *dev, int state) "vif%s state %d"
 xen_netdev_tx(int dev, int ref, int off, int len, unsigned int flags, const char *c, const char *d, const char *m, const char *e) "vif%u ref %u off %u len %u flags 0x%x%s%s%s%s"
 xen_netdev_rx(int dev, int idx, int status, int flags) "vif%u idx %d status %d flags 0x%x"
+
+# esp32s3_wifi.c
+esp32s3_wifi_slc_read(uint64_t addr, uint32_t val) "SLC read  addr=0x%04" PRIx64 " val=0x%08x"
+esp32s3_wifi_slc_write(uint64_t addr, uint64_t val) "SLC write addr=0x%04" PRIx64 " val=0x%08" PRIx64
+esp32s3_wifi_slc_dma_tx(uint64_t desc, uint32_t word0, uint32_t next) "TX desc=0x%08" PRIx64 " w0=0x%08x next=0x%08x"
+esp32s3_wifi_slc_dma_rx(uint64_t desc, uint32_t word0, uint32_t next) "RX desc=0x%08" PRIx64 " w0=0x%08x next=0x%08x"
+esp32s3_wifi_slc_irq(uint32_t raw, uint32_t ena, uint32_t pending) "SLC0 raw=0x%08x ena=0x%08x pending=0x%08x"
+esp32s3_wifi_slc_dma_start(const char *dir, uint64_t desc_addr) "SLC0 %s START desc=0x%08" PRIx64
+esp32s3_wifi_slc_dma_stop(const char *dir) "SLC0 %s STOP"

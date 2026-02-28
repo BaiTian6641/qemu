@@ -67,6 +67,19 @@
 #include "hw/gpio/esp32s3_iomux.h"
 #include "hw/timer/esp32s3_rmt.h"
 #include "hw/net/esp32s3_wifi.h"
+#include "hw/misc/esp32s3_syscon.h"
+#include "hw/misc/esp32s3_assist_debug.h"
+#include "hw/misc/esp32s3_regi2c.h"
+#include "hw/i2c/esp32s3_i2c.h"
+#include "hw/misc/esp32s3_ledc.h"
+#include "hw/misc/esp32s3_pcnt.h"
+#include "hw/misc/esp32s3_rtc_io.h"
+#include "hw/misc/esp32s3_bt.h"
+#include "hw/misc/esp32s3_i2s.h"
+#include "hw/misc/esp32s3_mcpwm.h"
+#include "hw/misc/esp32s3_lcd_cam.h"
+#include "hw/misc/esp32s3_usb_otg.h"
+#include "hw/misc/esp32s3_gpspi.h"
 
 #include "cpu_esp32s3.h"
 
@@ -157,6 +170,22 @@ typedef struct Esp32s3SocState {
     ESP32S3IOMuxState iomux;
     ESP32S3RmtState rmt;
     ESP32S3WifiState wifi;
+    ESP32S3SysconState syscon;
+    ESP32S3AssistDebugState assist_debug;
+    ESP32S3RegI2CState regi2c;
+
+    ESP32S3I2CState i2c[ESP32S3_I2C_COUNT];
+    ESP32S3LEDCState ledc;
+    ESP32S3PCNTState pcnt;
+    ESP32S3RtcIoState rtc_io;
+    ESP32S3BtState bt;
+
+    /* S7 peripherals */
+    ESP32S3I2SState i2s[2];
+    ESP32S3McpwmState mcpwm[2];
+    ESP32S3LcdCamState lcd_cam;
+    ESP32S3UsbOtgState usb_otg;
+    ESP32S3GpSpiState gpspi[2];
 
     MemoryRegion iomem;
     DWCSDMMCState sdmmc;
@@ -166,9 +195,6 @@ typedef struct Esp32s3SocState {
     uint32_t requested_reset;
 } Esp32s3SocState;
 
-
-/* Temporary macro to mark the CPU as in non-debugging mode */
-#define A_ASSIST_DEBUG_CORE_0_DEBUG_MODE_REG    0x098
 
 /* "QEMU" as a 32-bit value, can be used by the application to to check whether it is running in
  * QEMU or on real hardware */
@@ -328,7 +354,7 @@ struct Esp32s3MachineState {
 };
 #define TYPE_ESP32S3_MACHINE MACHINE_TYPE_NAME("esp32s3")
 
-static void esp32s3_init_openeth(Esp32s3SocState *ms)
+static void __attribute__((unused)) esp32s3_init_openeth(Esp32s3SocState *ms)
 {
     MemoryRegion* mr = NULL;
     SysBusDevice* sbd = NULL;
@@ -437,29 +463,33 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdmmc), 0,
                        qdev_get_gpio_in(intmatrix_dev, ETS_SDIO_HOST_INTR_SOURCE));
 
-    /* Emulation of APB_CTRL_DATE_REG, needed for ECO3 revision detection.
-     * This is a small hack to avoid creating a whole new device just to emulate one
-     * register.
-     */
-    const hwaddr apb_ctrl_regs = DR_REG_APB_CTRL_BASE;
-    MemoryRegion *apbctrl_mem = g_new(MemoryRegion, 1);
-    memory_region_init_ram(apbctrl_mem, NULL, "esp32s3.apbctrl", 0x400 /* bytes */, &error_fatal);
-    memory_region_add_subregion(sys_mem, apb_ctrl_regs, apbctrl_mem);
-    uint32_t apb_ctrl_date_reg_val = 0x16042000 | 0x80000000;  /* MSB indicates ECO3 silicon revision */
-    uint32_t qemu_sig = RGB_QEMU_ORIGIN;
-    cpu_physical_memory_write(apb_ctrl_regs + 0x7c, &apb_ctrl_date_reg_val, 4);
-    cpu_physical_memory_write(apb_ctrl_regs + RGB_QEMU_ORIGIN_REG, &qemu_sig, 4);
-
-    /* SYSCON_WIFI_CLK_EN_REG (offset 0x14): hardware default 0xFFFCE030.
-     * The ESP-IDF PHY init code asserts that modem clock bits (0x788F8F) are set
-     * after calling phy_module_enable(). Without this default, esp_wifi_init() fails.
+    /* SYSCON (APB_CTRL) register model — replaces the previous RAM hack.
+     * All SYSCON registers including WIFI_CLK_EN, WIFI_RST_EN, DATE, ACE
+     * regions, and QEMU signature are now handled by the proper device model.
      */
     {
-        uint32_t wifi_clk_en = 0xFFFCE030;
-        cpu_physical_memory_write(apb_ctrl_regs + 0x14, &wifi_clk_en, 4);
-        /* SYSCON_WIFI_RST_EN_REG (offset 0x18): default 0 (no modules in reset) */
-        uint32_t wifi_rst_en = 0x00000000;
-        cpu_physical_memory_write(apb_ctrl_regs + 0x18, &wifi_rst_en, 4);
+        sysbus_realize(SYS_BUS_DEVICE(&s->syscon), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->syscon), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_APB_CTRL_BASE, mr, 0);
+        /* Set the QEMU origin signature so apps can detect QEMU */
+        s->syscon.qemu_origin = RGB_QEMU_ORIGIN;
+    }
+
+    /* ASSIST_DEBUG realization — stack pointer guard & debug recording */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&s->assist_debug), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->assist_debug), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_ASSIST_DEBUG_BASE, mr, 0);
+        /* Connect core-0 interrupt to the interrupt matrix */
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->assist_debug), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_ASSIST_DEBUG_INTR_SOURCE));
+    }
+
+    /* REGI2C / I2C_ANA_MST analog bus stub — absorbs PHY calibration accesses */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&s->regi2c), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->regi2c), 0);
+        memory_region_add_subregion_overlap(sys_mem, ESP32S3_REGI2C_BASE, mr, 0);
     }
 
     qemu_register_reset((QEMUResetHandler*) esp32s3_soc_reset, dev);
@@ -611,7 +641,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(Esp32s3MachineState, ESP32S3_MACHINE)
 
 // -----------------------------------------------
 
-static void esp32s3_soc_add_unimp_device(MemoryRegion *dest, const char* name, hwaddr dport_base_addr, size_t size)
+/* Helper for quickly registering unimplemented MMIO at both DPORT and APB mappings.
+ * Kept for future sprint use when mapping stub peripherals. */
+static void __attribute__((unused))
+esp32s3_soc_add_unimp_device(MemoryRegion *dest, const char* name, hwaddr dport_base_addr, size_t size)
 {
     create_unimplemented_device(name, dport_base_addr, size);
     char * name_apb = g_strdup_printf("%s-apb", name);
@@ -679,6 +712,38 @@ static void esp32s3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(ss), "iomux", &ss->iomux, TYPE_ESP32S3_IOMUX);
     object_initialize_child(OBJECT(ss), "rmt", &ss->rmt, TYPE_ESP32S3_RMT);
     object_initialize_child(OBJECT(ss), "wifi", &ss->wifi, TYPE_ESP32S3_WIFI);
+    object_initialize_child(OBJECT(ss), "syscon", &ss->syscon, TYPE_ESP32S3_SYSCON);
+    object_initialize_child(OBJECT(ss), "assist_debug", &ss->assist_debug, TYPE_ESP32S3_ASSIST_DEBUG);
+    object_initialize_child(OBJECT(ss), "regi2c", &ss->regi2c, TYPE_ESP32S3_REGI2C);
+
+    for (int i = 0; i < ESP32S3_I2C_COUNT; i++) {
+        char name[8];
+        snprintf(name, sizeof(name), "i2c%d", i);
+        object_initialize_child(OBJECT(ss), name, &ss->i2c[i], TYPE_ESP32S3_I2C);
+    }
+    object_initialize_child(OBJECT(ss), "ledc", &ss->ledc, TYPE_ESP32S3_LEDC);
+    object_initialize_child(OBJECT(ss), "pcnt", &ss->pcnt, TYPE_ESP32S3_PCNT);
+    object_initialize_child(OBJECT(ss), "rtc_io", &ss->rtc_io, TYPE_ESP32S3_RTC_IO);
+    object_initialize_child(OBJECT(ss), "bt", &ss->bt, TYPE_ESP32S3_BT);
+
+    /* S7 peripherals */
+    for (int i = 0; i < 2; i++) {
+        char name[8];
+        snprintf(name, sizeof(name), "i2s%d", i);
+        object_initialize_child(OBJECT(ss), name, &ss->i2s[i], TYPE_ESP32S3_I2S);
+    }
+    for (int i = 0; i < 2; i++) {
+        char name[8];
+        snprintf(name, sizeof(name), "mcpwm%d", i);
+        object_initialize_child(OBJECT(ss), name, &ss->mcpwm[i], TYPE_ESP32S3_MCPWM);
+    }
+    object_initialize_child(OBJECT(ss), "lcd_cam", &ss->lcd_cam, TYPE_ESP32S3_LCD_CAM);
+    object_initialize_child(OBJECT(ss), "usb_otg", &ss->usb_otg, TYPE_ESP32S3_USB_OTG);
+    for (int i = 0; i < 2; i++) {
+        char name[8];
+        snprintf(name, sizeof(name), "gpspi%d", i + 2);
+        object_initialize_child(OBJECT(ss), name, &ss->gpspi[i], TYPE_ESP32S3_GPSPI);
+    }
 
     DeviceState* intmatrix_dev = DEVICE(&ss->intmatrix);
     {
@@ -687,8 +752,13 @@ static void esp32s3_machine_init(MachineState *machine)
         memory_region_add_subregion_overlap(sys_mem, DR_REG_INTERRUPT_BASE, mr, 0);
     }
 
-    /* Initialize OpenCores Ethernet controller now sicne it requires the interrupt matrix */
-    esp32s3_init_openeth(ss);
+    /* OpenCores Ethernet is no longer initialized by default.
+     * Wi-Fi data-plane backend (S4) now provides host networking via the
+     * QEMU NIC subsystem and uses ETS_WIFI_MAC_INTR_SOURCE (source 0).
+     * To use legacy OpenCores Ethernet instead, uncomment the line below
+     * and remove Wi-Fi MAC IRQ connection in the wifi block.
+     * esp32s3_init_openeth(ss);
+     */
 
     /* USB Serial JTAG realization */
     {
@@ -928,18 +998,140 @@ static void esp32s3_machine_init(MachineState *machine)
             sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->wifi), 5), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_WDEV_BASE,
             sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->wifi), 6), 0);
-        /* Connect Wi-Fi IRQs to interrupt matrix.
-         * Note: ETS_WIFI_MAC_INTR_SOURCE (0) is currently shared with
-         * OpenCores Ethernet (ETS_ETH_MAC_INTR_SOURCE), so we skip
-         * the MAC IRQ connection here until Wi-Fi replaces the Ethernet
-         * workaround. */
+        /* Connect all Wi-Fi IRQs to the interrupt matrix.
+         * Wi-Fi MAC IRQ now takes ETS_WIFI_MAC_INTR_SOURCE (source 0),
+         * replacing the OpenCores Ethernet workaround (S4). */
+        qdev_connect_gpio_out_named(DEVICE(&ss->wifi), ESP32S3_WIFI_IRQ_NAME, ESP32S3_WIFI_IRQ_MAC,
+                                    qdev_get_gpio_in(intmatrix_dev, ETS_WIFI_MAC_INTR_SOURCE));
+        qdev_connect_gpio_out_named(DEVICE(&ss->wifi), ESP32S3_WIFI_IRQ_NAME, ESP32S3_WIFI_IRQ_MAC_NMI,
+                                    qdev_get_gpio_in(intmatrix_dev, ETS_WIFI_MAC_NMI_SOURCE));
         qdev_connect_gpio_out_named(DEVICE(&ss->wifi), ESP32S3_WIFI_IRQ_NAME, ESP32S3_WIFI_IRQ_PWR,
                                     qdev_get_gpio_in(intmatrix_dev, ETS_WIFI_PWR_INTR_SOURCE));
         qdev_connect_gpio_out_named(DEVICE(&ss->wifi), ESP32S3_WIFI_IRQ_NAME, ESP32S3_WIFI_IRQ_BB,
                                     qdev_get_gpio_in(intmatrix_dev, ETS_WIFI_BB_INTR_SOURCE));
     }
 
-    
+    /* I2C controllers (×2) */
+    {
+        static const hwaddr i2c_base[] = { DR_REG_I2C_EXT_BASE, DR_REG_I2C1_EXT_BASE };
+        static const int i2c_irq[] = { ETS_I2C_EXT0_INTR_SOURCE, ETS_I2C_EXT1_INTR_SOURCE };
+        for (int i = 0; i < ESP32S3_I2C_COUNT; i++) {
+            sysbus_realize(SYS_BUS_DEVICE(&ss->i2c[i]), &error_fatal);
+            MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->i2c[i]), 0);
+            memory_region_add_subregion_overlap(sys_mem, i2c_base[i], mr, 0);
+            sysbus_connect_irq(SYS_BUS_DEVICE(&ss->i2c[i]), 0,
+                               qdev_get_gpio_in(intmatrix_dev, i2c_irq[i]));
+        }
+    }
+
+    /* LEDC (LED PWM controller) */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->ledc), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->ledc), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_LEDC_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->ledc), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_LEDC_INTR_SOURCE));
+    }
+
+    /* PCNT (Pulse Counter) */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->pcnt), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->pcnt), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_PCNT_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->pcnt), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_PCNT_INTR_SOURCE));
+    }
+
+    /* RTC IO MUX stub (no dedicated IRQ) */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->rtc_io), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->rtc_io), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_RTCIO_BASE, mr, 0);
+    }
+
+    /* BLE Controller (register model + QEMU HCI transport + virtual peer) */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->bt), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->bt), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_BT_BASE, mr, 0);
+        /* Wire 7 BT IRQs to interrupt matrix */
+        static const int bt_irq_sources[] = {
+            ETS_BT_MAC_INTR_SOURCE,   /* index 0 */
+            ETS_BT_BB_INTR_SOURCE,    /* index 1 */
+            ETS_BT_BB_NMI_SOURCE,     /* index 2 */
+            ETS_RWBT_INTR_SOURCE,     /* index 3 */
+            ETS_RWBLE_INTR_SOURCE,    /* index 4 */
+            ETS_RWBT_NMI_SOURCE,      /* index 5 */
+            ETS_RWBLE_NMI_SOURCE,     /* index 6 */
+        };
+        for (int i = 0; i < ESP32S3_BT_IRQ_COUNT; i++) {
+            qdev_connect_gpio_out_named(DEVICE(&ss->bt),
+                ESP32S3_BT_IRQ_NAME, i,
+                qdev_get_gpio_in(intmatrix_dev, bt_irq_sources[i]));
+        }
+    }
+
+    /* ================================================================ */
+    /*  S7 Peripheral Batch 2                                           */
+    /* ================================================================ */
+
+    /* I2S ×2 */
+    {
+        static const hwaddr i2s_base[] = { DR_REG_I2S_BASE, DR_REG_I2S1_BASE };
+        static const int i2s_irq[] = { ETS_I2S0_INTR_SOURCE, ETS_I2S1_INTR_SOURCE };
+        for (int i = 0; i < 2; i++) {
+            sysbus_realize(SYS_BUS_DEVICE(&ss->i2s[i]), &error_fatal);
+            MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->i2s[i]), 0);
+            memory_region_add_subregion_overlap(sys_mem, i2s_base[i], mr, 0);
+            sysbus_connect_irq(SYS_BUS_DEVICE(&ss->i2s[i]), 0,
+                               qdev_get_gpio_in(intmatrix_dev, i2s_irq[i]));
+        }
+    }
+
+    /* GP-SPI2 / GP-SPI3 */
+    {
+        static const hwaddr spi_base[] = { DR_REG_SPI2_BASE, DR_REG_SPI3_BASE };
+        static const int spi_irq[] = { ETS_SPI2_INTR_SOURCE, ETS_SPI3_INTR_SOURCE };
+        for (int i = 0; i < 2; i++) {
+            sysbus_realize(SYS_BUS_DEVICE(&ss->gpspi[i]), &error_fatal);
+            MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpspi[i]), 0);
+            memory_region_add_subregion_overlap(sys_mem, spi_base[i], mr, 0);
+            sysbus_connect_irq(SYS_BUS_DEVICE(&ss->gpspi[i]), 0,
+                               qdev_get_gpio_in(intmatrix_dev, spi_irq[i]));
+        }
+    }
+
+    /* MCPWM ×2 */
+    {
+        static const hwaddr mcpwm_base[] = { DR_REG_PWM0_BASE, DR_REG_PWM1_BASE };
+        static const int mcpwm_irq[] = { ETS_PWM0_INTR_SOURCE, ETS_PWM1_INTR_SOURCE };
+        for (int i = 0; i < 2; i++) {
+            sysbus_realize(SYS_BUS_DEVICE(&ss->mcpwm[i]), &error_fatal);
+            MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->mcpwm[i]), 0);
+            memory_region_add_subregion_overlap(sys_mem, mcpwm_base[i], mr, 0);
+            sysbus_connect_irq(SYS_BUS_DEVICE(&ss->mcpwm[i]), 0,
+                               qdev_get_gpio_in(intmatrix_dev, mcpwm_irq[i]));
+        }
+    }
+
+    /* LCD_CAM */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->lcd_cam), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->lcd_cam), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_LCD_CAM_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->lcd_cam), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_LCD_CAM_INTR_SOURCE));
+    }
+
+    /* USB OTG (DWC2 register stub) */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->usb_otg), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->usb_otg), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_USB_DWC_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->usb_otg), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_USB_INTR_SOURCE));
+    }
+
     esp32s3_machine_init_sd(ss);
 
     /* Need MMU initialized prior to ELF loading,

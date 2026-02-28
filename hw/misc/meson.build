@@ -168,7 +168,19 @@ system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files(
   'esp32s3_rng.c',
   'esp32s3_pms.c',
   'esp_hmac.c',
-  'esp32s3_hmac.c'
+  'esp32s3_hmac.c',
+  'esp32s3_syscon.c',
+  'esp32s3_assist_debug.c',
+  'esp32s3_regi2c.c',
+  'esp32s3_ledc.c',
+  'esp32s3_pcnt.c',
+  'esp32s3_rtc_io.c',
+  'esp32s3_bt.c',
+  'esp32s3_i2s.c',
+  'esp32s3_mcpwm.c',
+  'esp32s3_lcd_cam.c',
+  'esp32s3_usb_otg.c',
+  'esp32s3_gpspi.c',
 ))
 
 if gcrypt.found()
