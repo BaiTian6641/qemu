@@ -12,6 +12,7 @@
 
 /* Bootstrap options for ESP32-S3 (4-bit) */
 #define ESP32S3_STRAP_MODE_FLASH_BOOT 0x4   /* SPI Boot */
+#define ESP32S3_STRAP_MODE_UART_BOOT  0x0   /* ROM UART/USB download boot */
 
 /* ESP32-S3 has 49 GPIO pads (GPIO0 - GPIO48) */
 #define ESP32S3_GPIO_COUNT             49

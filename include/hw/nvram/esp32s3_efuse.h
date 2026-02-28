@@ -19,6 +19,10 @@
 
 typedef struct ESP32S3EfuseState {
     ESPEfuseState parent;
+    uint8_t custom_mac[6];
+    bool has_custom_mac;
+    uint32_t chip_revision;
+    bool has_chip_revision;
 } ESP32S3EfuseState;
 
 

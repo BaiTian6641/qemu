@@ -13,6 +13,7 @@
 #include "qemu/error-report.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
+#include "qapi/visitor.h"
 #include "qemu/memalign.h"
 #include "hw/hw.h"
 #include "hw/boards.h"
@@ -43,6 +44,7 @@
 #include "sysemu/block-backend.h"
 #include "exec/exec-all.h"
 #include "net/net.h"
+#include "net/util.h"
 #include "elf.h"
 
 #include "hw/ssi/esp32s3_spi.h"
@@ -361,6 +363,11 @@ struct Esp32s3MachineState {
 
     Esp32s3SocState esp32s3;
     DeviceState *flash_dev;
+    uint32_t boot_mode;
+    uint8_t custom_mac[6];
+    bool has_custom_mac;
+    uint32_t chip_revision;
+    bool has_chip_revision;
 };
 #define TYPE_ESP32S3_MACHINE MACHINE_TYPE_NAME("esp32s3")
 
@@ -649,6 +656,86 @@ static uint64_t translate_phys_addr(void *opaque, uint64_t addr)
 
 OBJECT_DECLARE_SIMPLE_TYPE(Esp32s3MachineState, ESP32S3_MACHINE)
 
+static void esp32s3_set_boot_mode(Object *obj, const char *str, Error **errp)
+{
+    Esp32s3MachineState *m = ESP32S3_MACHINE(obj);
+
+    if (!strncasecmp(str, "flash", 5) ||
+        !strncasecmp(str, "spi", 3) ||
+        !strncasecmp(str, "normal", 6)) {
+        m->boot_mode = ESP32S3_STRAP_MODE_FLASH_BOOT;
+        return;
+    }
+
+    if (!strncasecmp(str, "download", 8) ||
+        !strncasecmp(str, "uart", 4) ||
+        !strncasecmp(str, "rom", 3)) {
+        m->boot_mode = ESP32S3_STRAP_MODE_UART_BOOT;
+        return;
+    }
+
+    error_setg(errp, "%s boot mode not supported", str);
+}
+
+static void esp32s3_set_mac(Object *obj, const char *str, Error **errp)
+{
+    Esp32s3MachineState *m = ESP32S3_MACHINE(obj);
+
+    if (str == NULL || *str == '\0') {
+        m->has_custom_mac = false;
+        memset(m->custom_mac, 0, sizeof(m->custom_mac));
+        return;
+    }
+
+    if (net_parse_macaddr(m->custom_mac, str) != 0) {
+        error_setg(errp, "invalid MAC address '%s' (expected format XX:XX:XX:XX:XX:XX)", str);
+        return;
+    }
+
+    m->has_custom_mac = true;
+}
+
+static char *esp32s3_get_mac(Object *obj, Error **errp)
+{
+    Esp32s3MachineState *m = ESP32S3_MACHINE(obj);
+
+    if (!m->has_custom_mac) {
+        return g_strdup("");
+    }
+
+    return g_strdup_printf("%02x:%02x:%02x:%02x:%02x:%02x",
+                           m->custom_mac[0], m->custom_mac[1], m->custom_mac[2],
+                           m->custom_mac[3], m->custom_mac[4], m->custom_mac[5]);
+}
+
+static void esp32s3_set_chip_revision(Object *obj, Visitor *v, const char *name,
+                                      void *opaque, Error **errp)
+{
+    Esp32s3MachineState *m = ESP32S3_MACHINE(obj);
+    uint32_t value;
+
+    if (!visit_type_uint32(v, name, &value, errp)) {
+        return;
+    }
+
+    if (value > 399) {
+        error_setg(errp, "chip-revision must be in range 0..399 (major*100+minor)");
+        return;
+    }
+
+    m->chip_revision = value;
+    m->has_chip_revision = true;
+}
+
+static void esp32s3_get_chip_revision(Object *obj, Visitor *v, const char *name,
+                                      void *opaque, Error **errp)
+{
+    Esp32s3MachineState *m = ESP32S3_MACHINE(obj);
+    uint32_t value = m->has_chip_revision ? m->chip_revision : 0;
+
+    visit_type_uint32(v, name, &value, errp);
+}
+
 // -----------------------------------------------
 
 /* Helper for quickly registering unimplemented MMIO at both DPORT and APB mappings.
@@ -708,6 +795,7 @@ static void esp32s3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(ss), "efuse", &ss->efuse, TYPE_ESP32S3_EFUSE);
     object_initialize_child(OBJECT(ss), "jtag", &ss->jtag, TYPE_ESP32C3_JTAG);
     object_initialize_child(OBJECT(ss), "gpio", &ss->gpio, TYPE_ESP32S3_GPIO);
+    qdev_prop_set_uint32(DEVICE(&ss->gpio), "strap_mode", ms->boot_mode);
     object_initialize_child(OBJECT(ss), "rng", &ss->rng, TYPE_ESP32S3_RNG);
 
     object_initialize_child(OBJECT(ss), "clock", &ss->clock, TYPE_ESP32S3_CLOCK);
@@ -818,6 +906,11 @@ static void esp32s3_machine_init(MachineState *machine)
 
     /* eFuses realization */
     {
+        ss->efuse.has_custom_mac = ms->has_custom_mac;
+        memcpy(ss->efuse.custom_mac, ms->custom_mac, sizeof(ms->custom_mac));
+        ss->efuse.has_chip_revision = ms->has_chip_revision;
+        ss->efuse.chip_revision = ms->chip_revision;
+
         sysbus_realize(SYS_BUS_DEVICE(&ss->efuse), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->efuse), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_EFUSE_BASE, mr, 0);
@@ -1293,12 +1386,30 @@ static ram_addr_t esp32s3_fixup_ram_size(ram_addr_t requested_size)
 static void esp32s3_machine_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
+    ObjectProperty *prop;
     mc->desc = "Espressif ESP32S3 machine";
     mc->init = esp32s3_machine_init;
     mc->max_cpus = 2;
     mc->default_cpus = 2;
     mc->default_ram_size = 0;
     mc->fixup_ram_size = esp32s3_fixup_ram_size;
+
+    prop = object_class_property_add_str(oc, "boot-mode", NULL, esp32s3_set_boot_mode);
+    object_class_property_set_description(oc, "boot-mode",
+                                          "ESP32-S3 boot mode: flash|download");
+    object_property_set_default_str(prop, "flash");
+
+    prop = object_class_property_add_str(oc, "mac", esp32s3_get_mac, esp32s3_set_mac);
+    object_class_property_set_description(oc, "mac",
+                                          "ESP32-S3 base MAC address (XX:XX:XX:XX:XX:XX)");
+    object_property_set_default_str(prop, "");
+
+    object_class_property_add(oc, "chip-revision", "uint32",
+                              esp32s3_get_chip_revision,
+                              esp32s3_set_chip_revision,
+                              NULL, NULL);
+    object_class_property_set_description(oc, "chip-revision",
+                                          "ESP32-S3 revision encoded as major*100+minor (0..399)");
 }
 
 static const TypeInfo esp32s3_info = {

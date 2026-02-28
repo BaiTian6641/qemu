@@ -81,8 +81,7 @@ static uint64_t uart_read(void *opaque, hwaddr addr, unsigned int size)
     switch (addr) {
     case A_UART_FIFO:
         if (fifo8_num_used(&s->rx_fifo) == 0) {
-            r = 0xEE;
-            error_report("esp_uart: read UART FIFO while it is empty");
+            r = 0;
         } else {
             r = fifo8_pop(&s->rx_fifo);
             esp32_uart_update_irq(s);
