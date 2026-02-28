@@ -328,13 +328,16 @@ static void esp32s3_init_spi_flash(Esp32s3SocState *ms, BlockBackend* blk)
                                 qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0));
 }
 
-static void esp32s3_machine_init_psram(Esp32s3SocState *ms, uint32_t size_mbytes)
+static void esp32s3_machine_init_psram_with_mode(Esp32s3SocState *ms,
+                                                 uint32_t size_mbytes,
+                                                 bool is_octal)
 {
     /* PSRAM attached to SPI1, CS1 */
     DeviceState *spi_master = DEVICE(&ms->spi1);
     BusState* spi_bus = qdev_get_child_bus(spi_master, "spi");
     DeviceState *psram = qdev_new(TYPE_SSI_PSRAM);
     qdev_prop_set_uint32(psram, "size_mbytes", size_mbytes);
+    qdev_prop_set_bit(psram, "is_octal", is_octal);
     qdev_prop_set_uint8(psram, "cs", 1);
     qdev_realize(psram, spi_bus, &error_fatal);
     ms->psram = SSI_PSRAM(psram);
@@ -368,6 +371,7 @@ struct Esp32s3MachineState {
     bool has_custom_mac;
     uint32_t chip_revision;
     bool has_chip_revision;
+    bool psram_is_octal;
 };
 #define TYPE_ESP32S3_MACHINE MACHINE_TYPE_NAME("esp32s3")
 
@@ -736,6 +740,34 @@ static void esp32s3_get_chip_revision(Object *obj, Visitor *v, const char *name,
     visit_type_uint32(v, name, &value, errp);
 }
 
+static void esp32s3_set_psram_mode(Object *obj, const char *str, Error **errp)
+{
+    Esp32s3MachineState *m = ESP32S3_MACHINE(obj);
+
+    if (str == NULL || *str == '\0' ||
+        !strncasecmp(str, "qspi", 4) ||
+        !strncasecmp(str, "quad", 4)) {
+        m->psram_is_octal = false;
+        return;
+    }
+
+    if (!strncasecmp(str, "opi", 3) ||
+        !strncasecmp(str, "ospi", 4) ||
+        !strncasecmp(str, "oct", 3) ||
+        !strncasecmp(str, "octal", 5)) {
+        m->psram_is_octal = true;
+        return;
+    }
+
+    error_setg(errp, "invalid psram-mode '%s' (supported: qspi|opi)", str);
+}
+
+static char *esp32s3_get_psram_mode(Object *obj, Error **errp)
+{
+    Esp32s3MachineState *m = ESP32S3_MACHINE(obj);
+    return g_strdup(m->psram_is_octal ? "opi" : "qspi");
+}
+
 // -----------------------------------------------
 
 /* Helper for quickly registering unimplemented MMIO at both DPORT and APB mappings.
@@ -883,7 +915,9 @@ static void esp32s3_machine_init(MachineState *machine)
             esp32s3_init_spi_flash(ss, blk);
         }
         if (machine->ram_size > 0) {
-            esp32s3_machine_init_psram(ss, (uint32_t) (machine->ram_size / MiB));
+            esp32s3_machine_init_psram_with_mode(ss,
+                                                 (uint32_t) (machine->ram_size / MiB),
+                                                 ms->psram_is_octal);
         }
     }
 
@@ -1410,6 +1444,13 @@ static void esp32s3_machine_class_init(ObjectClass *oc, void *data)
                               NULL, NULL);
     object_class_property_set_description(oc, "chip-revision",
                                           "ESP32-S3 revision encoded as major*100+minor (0..399)");
+
+    prop = object_class_property_add_str(oc, "psram-mode",
+                                         esp32s3_get_psram_mode,
+                                         esp32s3_set_psram_mode);
+    object_class_property_set_description(oc, "psram-mode",
+                                          "PSRAM bus mode: qspi|opi (requires -m > 0)");
+    object_property_set_default_str(prop, "qspi");
 }
 
 static const TypeInfo esp32s3_info = {
