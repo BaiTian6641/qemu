@@ -28,8 +28,9 @@
 #define TYPE_ESP32S3_I2C_BRIDGE "esp32s3.i2c-bridge"
 OBJECT_DECLARE_SIMPLE_TYPE(Esp32S3I2CBridgeState, ESP32S3_I2C_BRIDGE)
 
-/* Maximum bytes we buffer in a single I2C transaction */
-#define I2C_BRIDGE_MAX_XFER  1024
+/* Maximum bytes we buffer in a single I2C transaction.
+ * Must be > 1025 for a full SSD1306 frame (1 control byte + 1024 GDDRAM). */
+#define I2C_BRIDGE_MAX_XFER  4096
 
 /* Maximum bytes we buffer for read-back responses */
 #define I2C_BRIDGE_RSP_MAX   256
