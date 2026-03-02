@@ -73,6 +73,7 @@
 #include "hw/misc/esp32s3_assist_debug.h"
 #include "hw/misc/esp32s3_regi2c.h"
 #include "hw/i2c/esp32s3_i2c.h"
+#include "hw/i2c/esp32s3_i2c_bridge.h"
 #include "hw/misc/esp32s3_ledc.h"
 #include "hw/misc/esp32s3_pcnt.h"
 #include "hw/misc/esp32s3_rtc_io.h"
@@ -1166,6 +1167,31 @@ static void esp32s3_machine_init(MachineState *machine)
             memory_region_add_subregion_overlap(sys_mem, i2c_base[i], mr, 0);
             sysbus_connect_irq(SYS_BUS_DEVICE(&ss->i2c[i]), 0,
                                qdev_get_gpio_in(intmatrix_dev, i2c_irq[i]));
+        }
+
+        /*
+         * Attach one I2C bridge slave per bus for the GUI peripheral
+         * bridge.  No addresses are registered yet — the GUI pushes
+         * them at runtime via QMP qom-set on the "registered-addrs"
+         * property.  Until then, I2C scans return no devices (NACK).
+         *
+         * QOM paths for the bridges:
+         *   /machine/soc/i2c0/i2c/child[0]   (bus 0)
+         *   /machine/soc/i2c1/i2c/child[0]   (bus 1)
+         */
+        for (int b = 0; b < ESP32S3_I2C_COUNT; b++) {
+            I2CBus *bus = (I2CBus *)qdev_get_child_bus(
+                                       DEVICE(&ss->i2c[b]), "i2c");
+            if (!bus) {
+                continue;
+            }
+            char ctrl_name[8];
+            snprintf(ctrl_name, sizeof(ctrl_name), "i2c%d", b);
+
+            DeviceState *brdev = qdev_new(TYPE_ESP32S3_I2C_BRIDGE);
+            qdev_prop_set_string(brdev, "controller", ctrl_name);
+            i2c_slave_realize_and_unref(I2C_SLAVE(brdev), bus,
+                                        &error_fatal);
         }
     }
 
