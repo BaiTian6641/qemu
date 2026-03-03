@@ -61,6 +61,13 @@
 #define SPI_CMD_USR            BIT(24)  /* SPI_USR: trigger user-defined transaction */
 #define SPI_CMD_UPDATE         BIT(23)  /* SPI_UPDATE: latch config */
 
+/* USER register bits */
+#define SPI_USR_MOSI           BIT(27)  /* Enable MOSI data-out phase */
+#define SPI_USR_MISO           BIT(28)  /* Enable MISO data-in phase */
+
+/* Maximum bridge DMA capture (covers ESP-IDF max DMA segment of 4092 bytes) */
+#define GPSPI_BRIDGE_DMA_MAX   4096
+
 #define ESP32S3_GPSPI_REGS_COUNT  (ESP32S3_GPSPI_REG_SIZE / 4)
 
 typedef struct ESP32S3GpSpiState {
@@ -75,4 +82,13 @@ typedef struct ESP32S3GpSpiState {
     uint32_t regs[ESP32S3_GPSPI_REGS_COUNT];
     uint32_t int_raw;
     uint32_t int_ena;
+
+    /* ---- Bridge fields (SPI → GUI) ---- */
+    char *controller_name;          /* "spi2" or "spi3", set by machine model */
+    uint8_t dc_gpio;                /* GPIO number for DC pin (0xFF = disabled) */
+    bool bridge_enabled;            /* suppress emit until controller_name is set */
+
+    /* DMA capture buffer — filled by try_dma, consumed by bridge emit */
+    uint8_t dma_out_buf[GPSPI_BRIDGE_DMA_MAX];
+    uint32_t dma_out_len;
 } ESP32S3GpSpiState;

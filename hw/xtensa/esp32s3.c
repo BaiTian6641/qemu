@@ -1267,9 +1267,15 @@ static void esp32s3_machine_init(MachineState *machine)
         static const hwaddr spi_base[] = { DR_REG_SPI2_BASE, DR_REG_SPI3_BASE };
         static const int spi_irq[] = { ETS_SPI2_INTR_SOURCE, ETS_SPI3_INTR_SOURCE };
         static const GdmaPeripheral spi_gdma_periph[] = { GDMA_SPI2, GDMA_SPI3 };
+        static const char *spi_name[] = { "spi2", "spi3" };
         for (int i = 0; i < 2; i++) {
             ss->gpspi[i].gdma = ESP_GDMA(&ss->gdma);
             ss->gpspi[i].gdma_periph = spi_gdma_periph[i];
+            /* Bridge: tag with controller name and enable bridge emission */
+            qdev_prop_set_string(DEVICE(&ss->gpspi[i]),
+                                 "controller-name", spi_name[i]);
+            qdev_prop_set_bit(DEVICE(&ss->gpspi[i]),
+                              "bridge-enabled", true);
             sysbus_realize(SYS_BUS_DEVICE(&ss->gpspi[i]), &error_fatal);
             MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->gpspi[i]), 0);
             memory_region_add_subregion_overlap(sys_mem, spi_base[i], mr, 0);
