@@ -254,6 +254,28 @@ static const MemoryRegionOps esp32s3_gpspi_ops = {
     .impl.max_access_size = 4,
 };
 
+/* ---- Runtime-writable QOM property: "bridge-dc-gpio" ---- */
+
+static char *gpspi_get_dc_gpio(Object *obj, Error **errp)
+{
+    ESP32S3GpSpiState *s = ESP32S3_GPSPI(obj);
+    if (s->dc_gpio == 0xFF) {
+        return g_strdup("");
+    }
+    return g_strdup_printf("%u", s->dc_gpio);
+}
+
+static void gpspi_set_dc_gpio(Object *obj, const char *value, Error **errp)
+{
+    ESP32S3GpSpiState *s = ESP32S3_GPSPI(obj);
+    if (!value || !*value) {
+        s->dc_gpio = 0xFF;
+        return;
+    }
+    unsigned long pin = strtoul(value, NULL, 10);
+    s->dc_gpio = (pin <= 48) ? (uint8_t)pin : 0xFF;
+}
+
 static void esp32s3_gpspi_init(Object *obj)
 {
     ESP32S3GpSpiState *s = ESP32S3_GPSPI(obj);
@@ -294,28 +316,6 @@ static Property esp32s3_gpspi_properties[] = {
     DEFINE_PROP_BOOL("bridge-enabled", ESP32S3GpSpiState, bridge_enabled, false),
     DEFINE_PROP_END_OF_LIST(),
 };
-
-/* ---- Runtime-writable QOM property: "bridge-dc-gpio" ---- */
-
-static char *gpspi_get_dc_gpio(Object *obj, Error **errp)
-{
-    ESP32S3GpSpiState *s = ESP32S3_GPSPI(obj);
-    if (s->dc_gpio == 0xFF) {
-        return g_strdup("");
-    }
-    return g_strdup_printf("%u", s->dc_gpio);
-}
-
-static void gpspi_set_dc_gpio(Object *obj, const char *value, Error **errp)
-{
-    ESP32S3GpSpiState *s = ESP32S3_GPSPI(obj);
-    if (!value || !*value) {
-        s->dc_gpio = 0xFF;
-        return;
-    }
-    unsigned long pin = strtoul(value, NULL, 10);
-    s->dc_gpio = (pin <= 48) ? (uint8_t)pin : 0xFF;
-}
 
 static void esp32s3_gpspi_class_init(ObjectClass *klass, void *data)
 {
