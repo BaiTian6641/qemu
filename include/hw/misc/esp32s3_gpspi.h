@@ -65,6 +65,9 @@
 #define SPI_USR_MOSI           BIT(27)  /* Enable MOSI data-out phase */
 #define SPI_USR_MISO           BIT(28)  /* Enable MISO data-in phase */
 
+/* DMA_CONF register bits */
+#define SPI_DMA_TX_ENA         BIT(28)
+
 /* Maximum bridge DMA capture (covers ESP-IDF max DMA segment of 4092 bytes) */
 #define GPSPI_BRIDGE_DMA_MAX   4096
 

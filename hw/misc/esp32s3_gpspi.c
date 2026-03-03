@@ -100,6 +100,11 @@ static void esp32s3_gpspi_try_dma(ESP32S3GpSpiState *s)
 
     s->dma_out_len = 0;   /* Reset DMA capture */
 
+    /* Only capture DMA TX payload when SPI DMA TX path is enabled. */
+    if ((s->regs[SPI_DMA_CONF_REG / 4] & SPI_DMA_TX_ENA) == 0) {
+        return;
+    }
+
     if (!s->gdma) {
         return;
     }
