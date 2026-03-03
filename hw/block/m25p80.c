@@ -1693,6 +1693,17 @@ static void m25p80_realize(SSIPeripheral *ss, Error **errp)
         trace_m25p80_binding(s);
         s->storage = blk_blockalign(s->blk, s->size);
 
+        /* Pre-fill with 0xFF (erased-flash state) so that any regions
+         * the block layer considers "zero" (sparse / unwritten) will
+         * appear as erased flash rather than random memory.  This is
+         * critical for ESP-IDF firmware that validates the coredump
+         * partition at boot — if those bytes are not 0xFF the firmware
+         * sees a corrupt header and abort()s.
+         *
+         * blk_check_size_and_read_all -> blk_pread_nonzeroes only
+         * overwrites non-zero sectors, leaving the rest untouched. */
+        memset(s->storage, 0xFF, s->size);
+
         if (!blk_check_size_and_read_all(s->blk, DEVICE(s),
                                          s->storage, s->size, errp)) {
             return;
