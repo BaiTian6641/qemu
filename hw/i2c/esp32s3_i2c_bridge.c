@@ -122,6 +122,130 @@ static void bridge_set_addrs(Object *obj, const char *value, Error **errp)
 }
 
 /* ================================================================== */
+/*  QOM property "read-response-map" (runtime-writable)               */
+/*  Format: "addr.cmd:hexdata;addr.cmd:hexdata;..."                   */
+/*  Example: "40.e7:0258;40.e3:60c6ba;40.e5:7d80a2"                  */
+/* ================================================================== */
+
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int parse_hex_byte(const char **pp)
+{
+    const char *p = *pp;
+    int hi = hex_nibble(p[0]);
+    int lo = (hi >= 0) ? hex_nibble(p[1]) : -1;
+    if (hi < 0 || lo < 0) return -1;
+    *pp = p + 2;
+    return (hi << 4) | lo;
+}
+
+static void bridge_parse_rmap(Esp32S3I2CBridgeState *s, const char *str)
+{
+    s->rmap_count = 0;
+    if (!str || !*str) return;
+
+    const char *p = str;
+    while (*p && s->rmap_count < I2C_BRIDGE_RMAP_MAX_ENTRIES) {
+        /* skip separators */
+        while (*p == ';' || *p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+
+        /* parse addr (2 hex digits) */
+        int addr = parse_hex_byte(&p);
+        if (addr < 0 || *p != '.') break;
+        p++; /* skip '.' */
+
+        /* parse cmd (2 hex digits) */
+        int cmd = parse_hex_byte(&p);
+        if (cmd < 0 || *p != ':') break;
+        p++; /* skip ':' */
+
+        /* parse data bytes (pairs of hex digits) */
+        I2CBridgeResponseMapEntry *e = &s->rmap[s->rmap_count];
+        e->addr = (uint8_t)addr;
+        e->cmd  = (uint8_t)cmd;
+        e->len  = 0;
+
+        while (*p && *p != ';' && e->len < I2C_BRIDGE_RMAP_DATA_MAX) {
+            int b = parse_hex_byte(&p);
+            if (b < 0) break;
+            e->data[e->len++] = (uint8_t)b;
+        }
+
+        if (e->len > 0) {
+            s->rmap_count++;
+            BRIDGE_DPRINTF("rmap[%d]: addr=0x%02x cmd=0x%02x len=%d\n",
+                           s->rmap_count - 1, e->addr, e->cmd, e->len);
+        }
+    }
+}
+
+static void bridge_rebuild_rmap_str(Esp32S3I2CBridgeState *s)
+{
+    g_free(s->rmap_str);
+
+    if (s->rmap_count == 0) {
+        s->rmap_str = g_strdup("");
+        return;
+    }
+
+    GString *gs = g_string_new(NULL);
+    for (int i = 0; i < s->rmap_count; i++) {
+        const I2CBridgeResponseMapEntry *e = &s->rmap[i];
+        if (i > 0) g_string_append_c(gs, ';');
+        g_string_append_printf(gs, "%02x.%02x:", e->addr, e->cmd);
+        for (int j = 0; j < e->len; j++) {
+            g_string_append_printf(gs, "%02x", e->data[j]);
+        }
+    }
+    s->rmap_str = g_string_free(gs, FALSE);
+}
+
+static char *bridge_get_rmap(Object *obj, Error **errp)
+{
+    Esp32S3I2CBridgeState *s = ESP32S3_I2C_BRIDGE(obj);
+    return g_strdup(s->rmap_str ? s->rmap_str : "");
+}
+
+static void bridge_set_rmap(Object *obj, const char *value, Error **errp)
+{
+    Esp32S3I2CBridgeState *s = ESP32S3_I2C_BRIDGE(obj);
+    bridge_parse_rmap(s, value);
+    bridge_rebuild_rmap_str(s);
+    BRIDGE_DPRINTF("read-response-map set (%d entries) on %s\n",
+                   s->rmap_count,
+                   s->controller_name ? s->controller_name : "?");
+}
+
+/*
+ * Look up the response map for (addr, cmd) and populate rsp_buf.
+ */
+static void bridge_lookup_response(Esp32S3I2CBridgeState *s,
+                                   uint8_t addr, uint8_t cmd)
+{
+    for (int i = 0; i < s->rmap_count; i++) {
+        const I2CBridgeResponseMapEntry *e = &s->rmap[i];
+        if (e->addr == addr && e->cmd == cmd) {
+            int n = e->len;
+            if (n > I2C_BRIDGE_RSP_MAX) n = I2C_BRIDGE_RSP_MAX;
+            memcpy(s->rsp_buf, e->data, n);
+            s->rsp_len = n;
+            s->rsp_pos = 0;
+            BRIDGE_DPRINTF("rmap hit: addr=0x%02x cmd=0x%02x → %d bytes\n",
+                           addr, cmd, n);
+            return;
+        }
+    }
+    BRIDGE_DPRINTF("rmap miss: addr=0x%02x cmd=0x%02x\n", addr, cmd);
+}
+
+/* ================================================================== */
 /*  Custom match_and_add  (replaces default i2c_slave_match)          */
 /* ================================================================== */
 
@@ -214,14 +338,35 @@ static int esp32s3_i2c_bridge_event(I2CSlave *i2c, enum i2c_event event)
 
     case I2C_START_RECV:
         BRIDGE_DPRINTF("START_RECV addr=0x%02x\n", s->current_target_addr);
+        /*
+         * If switching from write to read (repeated-start), emit the
+         * write event now and pre-populate rsp_buf from the response map
+         * so that the subsequent recv() calls return the correct data.
+         */
+        if (!s->in_recv && s->xfer_len > 0) {
+            /* Emit the write event before it gets lost */
+            esp32s3_i2c_bridge_emit(s, false);
+            /* Look up the response for the command just written */
+            bridge_lookup_response(s, s->current_target_addr, s->xfer_buf[0]);
+        }
         s->in_recv = true;
         s->xfer_len = 0;
+        /* Always reset read position for a new read phase */
+        s->rsp_pos = 0;
         break;
 
     case I2C_FINISH:
         BRIDGE_DPRINTF("FINISH addr=0x%02x len=%u recv=%d\n",
                        s->current_target_addr, s->xfer_len, s->in_recv);
         if (s->xfer_len > 0) {
+            if (!s->in_recv) {
+                /*
+                 * Write transaction finished (separate STOP).
+                 * Pre-populate rsp_buf for the likely subsequent read.
+                 */
+                bridge_lookup_response(s, s->current_target_addr,
+                                       s->xfer_buf[0]);
+            }
             esp32s3_i2c_bridge_emit(s, s->in_recv);
         }
         s->xfer_len = 0;
@@ -290,10 +435,14 @@ static void esp32s3_i2c_bridge_instance_init(Object *obj)
     s->rsp_len = 0;
     s->rsp_pos = 0;
     s->in_recv = false;
+    s->rmap_count = 0;
+    s->rmap_str = NULL;
 
-    /* Register the runtime-writable QOM property */
+    /* Register the runtime-writable QOM properties */
     object_property_add_str(obj, "registered-addrs",
                             bridge_get_addrs, bridge_set_addrs);
+    object_property_add_str(obj, "read-response-map",
+                            bridge_get_rmap, bridge_set_rmap);
 }
 
 static void esp32s3_i2c_bridge_realize(DeviceState *dev, Error **errp)

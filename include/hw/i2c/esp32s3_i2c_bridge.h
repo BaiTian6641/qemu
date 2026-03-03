@@ -35,6 +35,18 @@ OBJECT_DECLARE_SIMPLE_TYPE(Esp32S3I2CBridgeState, ESP32S3_I2C_BRIDGE)
 /* Maximum bytes we buffer for read-back responses */
 #define I2C_BRIDGE_RSP_MAX   256
 
+/* Pre-populated command→response map so that reads return data immediately.
+ * The GUI pushes this via QMP `qom-set` of the "read-response-map" property. */
+#define I2C_BRIDGE_RMAP_MAX_ENTRIES 32
+#define I2C_BRIDGE_RMAP_DATA_MAX   64
+
+typedef struct {
+    uint8_t addr;                               /* 7-bit I2C address */
+    uint8_t cmd;                                /* first write byte (command) */
+    uint8_t data[I2C_BRIDGE_RMAP_DATA_MAX];     /* response bytes */
+    int     len;                                /* number of valid bytes in data[] */
+} I2CBridgeResponseMapEntry;
+
 struct Esp32S3I2CBridgeState {
     I2CSlave parent_obj;
 
@@ -55,4 +67,9 @@ struct Esp32S3I2CBridgeState {
     uint8_t  rsp_buf[I2C_BRIDGE_RSP_MAX];
     uint32_t rsp_len;
     uint32_t rsp_pos;
+
+    /* ---- pre-populated command→response map ---- */
+    I2CBridgeResponseMapEntry rmap[I2C_BRIDGE_RMAP_MAX_ENTRIES];
+    int                       rmap_count;
+    char                     *rmap_str;   /* cached string for QOM getter */
 };

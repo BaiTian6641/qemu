@@ -1699,7 +1699,7 @@ static void m25p80_realize(SSIPeripheral *ss, Error **errp)
          * critical for ESP-IDF firmware that validates the coredump
          * partition at boot — if those bytes are not 0xFF the firmware
          * sees a corrupt header and abort()s.
-         *
+         *\
          * blk_check_size_and_read_all -> blk_pread_nonzeroes only
          * overwrites non-zero sectors, leaving the rest untouched. */
         memset(s->storage, 0xFF, s->size);
